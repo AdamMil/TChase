@@ -7,61 +7,53 @@ namespace TriangleChase
 {
 
 public sealed class App
-{ public static void Main()
+{ public const int  Version = 10;     // divide by 100 to get version #. ie, 150 = version 1.5
+  public const byte ProtoVersion = 1; // network protocol version
+
+  public static void Main()
   { Events.Initialize();
+
+    Server = new Server();
+    Server.Start("testmap.xml");
+
     Video.Initialize();
     Input.Initialize(false);
-
     Video.SetMode(400, 300, 32, SurfaceFlag.Fullscreen);
-    Globals.InitSprites();
+    Globals.InitGraphics();
+    Client = new Client();
+    Client.Connect(Server.LocalEndPoint);
 
-    World = new World();
-    World.Load("fg.png", "bg.png", "overlay.pcx");
-    World.AddGun(typeof(MachineGun));
-    World.AddGun(typeof(FBMachineGun));
-    World.AddGun(typeof(DualMachineGun));
-    World.AddGun(typeof(WavyMachineGun));
-    World.AddSpecial(typeof(Cannon));
-    World.AddSpecial(typeof(GrenadeLauncher));
-    World.AddSpecial(typeof(Afterburner));
-    
-    Player p = new Player("Adam", Team.Green);
-    World.AddPlayer(p);
-    World.Me = p;
-
-    uint tickStart = GameLib.Timing.Ticks, tick, frames=0;
-    float fps=0;
-    World.Start();
-    while(true)
-    { Event e;
-      while((e=Events.NextEvent(0))!=null) if(!ProcessEvent(e)) goto Quit;
-      /*if(*/World.DoTicks();//)
-      { World.Render(Video.DisplaySurface);
-        tick = GameLib.Timing.Ticks;
-        frames++;
-        if(tick-tickStart>1000)
-        { //fps = String.Format("{0} fps ({1} frames in {2} ms)", (frames*100000)/(tick-tickStart)/100.0f, frames, tick-tickStart);
-          fps = (frames*100000)/(tick-tickStart)/100.0f;
-          frames = 0;
-          tickStart = tick;
+    try
+    { while(true)
+      { Event e;
+        while((e=Events.NextEvent(0))!=null) if(!ProcessEvent(e)) break;
+        if(Server!=null) Server.DoTicks();
+        if(Client!=null && Client.DoTicks())
+        { Client.Render(Video.DisplaySurface);
+          Video.Flip();
         }
-        
-        Globals.Font.Render(Video.DisplaySurface, String.Format("{0} fps, {1} objects", fps, World.nObjects), 4, Video.DisplaySurface.Height-Globals.Font.Height);
-        Video.Flip();
       }
     }
-    Quit:
-    Input.Deinitialize();
-    Video.Deinitialize();
-    Events.Deinitialize();
+    finally
+    { if(Client!=null) Client.Disconnect();
+      if(Server!=null) Server.Stop();
+      if(Client!=null)
+      { Input.Deinitialize();
+        Video.Deinitialize();
+      }
+      Events.Deinitialize();
+    }
   }
 
   public static bool ProcessEvent(Event e)
-  { if(e is QuitEvent) return false;
+  { if(e is RepaintEvent) Video.Flip();
+    else if(e is QuitEvent) return false;
+    else if(e is ExceptionEvent) throw ((ExceptionEvent)e).Exception;
     return true;
   }
-  
-  public static World World;
+
+  public static Server Server;
+  public static Client Client;
 }
 
 }

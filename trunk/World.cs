@@ -1,91 +1,88 @@
 using System;
 using System.Drawing;
-using System.IO;
 using System.Collections;
-using GameLib.Events;
 using GameLib.Video;
-using GameLib.Input;
 using GameLib.Collections;
 using GameLib.Mathematics;
 
 namespace TriangleChase
 {
 
-public enum Explosion
-{ Tiny, Small, Medium, Large, Huge, Armageddon
-}
-public enum State
-{ InPlay, BaseMenu, MaybeQuit
-}
-public enum Team
-{ Green, Blue, Red
-}
+public enum Explosion : byte { Tiny, Small, Medium, Large, Huge, Armageddon }
+public enum Team : byte { Unspecified, Green, Blue, Red }
+public enum State { InPlay, BaseMenu, MaybeQuit, Disconnected }
+
 public class World
-{ public World() { keyHandler = new KeyPressHandler(OnKey); }
-
-  public void Load(string foreground, string background, string overlay)
-  { fore = new Surface(Globals.DataPath+foreground).CloneDisplay(false);
-    back = new Surface(Globals.DataPath+background).CloneDisplay(false);
-    over = new Surface(Globals.DataPath+overlay);
-    fore.SetColorKey(Colors.Transparent);
-    tick = 0;
-
-    objects.Clear();
-    guns.Clear();
-    specials.Clear();
-    netGame = false;
-  }
-
-  public int nObjects;
-  
-  public Player Me
-  { get { return me; }
-    set { me = (Player)players[players.IndexOf(value)]; if(focus==null) focus=me.Ship; } // throws exception if not found
-  }
-  public GameObject Focus
-  { get { return focus; }
-    set { if(value==null && me!=null) focus=me.Ship; else focus=value; }
-  }
-  public bool Net { get { return netGame; } }
-  public int NumGuns     { get { return guns.Count; } }
-  public int NumSpecials { get { return specials.Count; } }
+{ public bool IsServer;
+  public GameObject Focus;
 
   public uint TPS
   { get { return tps; }
     set { timeInc=1000/value; tps=value; }
   }
-
   public uint Tick { get { return tick; } }
-  public State State
-  { get { return state; }
-    set
-    { SetKeyHandler(value==State.BaseMenu || value==State.MaybeQuit);
-      lastState = state;
-      state = value;
-    }
-  }
   public VectorF Gravity = new VectorF(0, 1f/30);
+
+  public ArrayList Players { get { return players; } }
+  
+  public void Load(string mapname, bool server)
+  { System.Xml.XmlDocument xml = new System.Xml.XmlDocument();
+    xml.Load(mapname);
+    Load(xml, server);
+  }
+  public void Load(System.Xml.XmlDocument xml, bool server)
+  { Unload();
+    fore = new Surface(Globals.MapPath+xml.DocumentElement.GetAttribute("fore")).CloneDisplay(false);
+    back = new Surface(Globals.MapPath+xml.DocumentElement.GetAttribute("back")).CloneDisplay(false);
+    over = new Surface(Globals.MapPath+xml.DocumentElement.GetAttribute("overlay"));
+    fore.SetColorKey(Colors.Transparent);
+    
+    tick = 0;
+    objects.Clear(); objIndex.Clear();
+    IsServer = server;
+  }
+  
+  public void Unload()
+  { fore.Dispose();
+    back.Dispose();
+    over.Dispose();
+    fore = back = null;
+  }
 
   public bool HitMap(int x, int y)  { return x<0 || y<0 || x>=over.Width || y>=over.Height || (over.GetPixelRaw(x, y)&2)!=0; }
   public bool HitBase(int x, int y) { return x>=0 && y>=0 && x<over.Width && y<over.Height && (over.GetPixelRaw(x, y)&4)!=0; }
+  
+  public void AddPlayer(Player p) { players.Add(p); }
+  public void RemPlayer(Player p) { players.Remove(p); }
 
-  public void AddPlayer(Player p)
-  { players.Add(p);
+  public uint AddObject(GameObject o)
+  { AddObject(o, nextObj++);
+    return o.ID;
   }
-  public void RemPlayer(Player p)
-  { players.Remove(p);
-    if(p==me) me=null;
+  public void AddObject(GameObject o, uint id)
+  { o.ID         = id;
+    objIndex[id] = objects.Append(o);
+    o.World      = this;
+    switch(o.NetPolicy)
+    { default: throw new ArgumentException(String.Format("Object {0} has unknown net policy", o));
+    }
   }
-  public void AddObject(GameObject o) { objects.Append(o); nObjects++; }
+  public void RemoveObject(GameObject o) { RemoveObject(o.ID); }
+  public void RemoveObject(uint id)
+  { if(!objIndex.Contains(id)) return;
+    LinkedList.Node node = (LinkedList.Node)objIndex[id];
+    objIndex.Remove(node);
+    objects.Remove(node);
+  }
 
   public void Start()
   { nextTime = GameLib.Timing.Ticks;
-    State    = State.InPlay;
-    if(!netGame) foreach(Player p in players) p.Ship.Spawn(FindSpawnPoint());
+    nextObj  = 1;
+    updated  = false;
   }
 
   public void Render(Surface display)
-  { int camX = focus.RX, camY = focus.RY;
+  { int camX = Focus.RX, camY = Focus.RY;
     int w = display.Width/2, h=display.Height/2;
     Rectangle frect = new Rectangle(camX-w, camY-h, camX+w, camY+h), brect = new Rectangle();
 
@@ -117,160 +114,21 @@ public class World
     display.Lock();
     foreach(GameObject o in objects) if(!o.Remove) o.Draw(display, frect.X, frect.Y);
     foreach(Player p in players) p.Ship.Draw(display, frect.X, frect.Y);
-
-    if(me!=null)
-    { int bx=4, by=3, bw=40, bh=2, hw=bw*me.Ship.Health/me.Ship.MaxHealth, fw=bw*me.Ship.Fuel/me.Ship.MaxFuel,
-          gw=me.Ship.Gun==null ? 0 : bw*me.Ship.Gun.Ammo/me.Ship.Gun.MaxAmmo,
-          sw=me.Ship.Special==null ? 0 : bw*me.Ship.Special.Ammo/me.Ship.Special.MaxAmmo;
-      if(hw>0) Primitives.FilledBox(display, bx, by, bx+hw, by+bh, Colors.LtRed);
-      if(fw>0) Primitives.FilledBox(display, bx, by+bh+2,   bx+fw, by+bh*2+2, Colors.LtBlue);
-      if(gw>0) Primitives.FilledBox(display, bx, by+bh*2+4, bx+gw, by+bh*3+4, Colors.Green);
-      if(sw>0) Primitives.FilledBox(display, bx, by+bh*3+6, bx+sw, by+bh*4+6, Colors.LtGrey);
-    }
     display.Unlock();
-    
-    { int x=display.Width-5, y=0;
-      foreach(Player p in players)
-        if(p!=me)
-        { int wid = Globals.Font.CalculateSize(p.Name).Width;
-          Globals.Font.Color = p.Ship.Color;
-          Globals.Font.Render(display, p.Name, x-wid, y);
-          y += Globals.Font.LineSkip;
-        }
-    }
-
-    switch(State)
-    { case State.InPlay:
-        Globals.Font.Color = Colors.White;
-        if(me.Ship.Dead) Globals.Font.Center(display, "Press [space] to respawn!");
-        else if(me.Ship.OnBase && me.Ship.Health>0) Globals.Font.Center(display, "Press [enter] to dock", -50);
-        break;
-      case State.BaseMenu:
-        { int x=10, y=120, wid = Globals.Font.CalculateSize("Special: ").Width;
-          Globals.Font.Color = menuGun ? Colors.White : Colors.LtGrey;
-          Globals.Font.Render(display, "Gun:", x, y);
-          Globals.Font.Render(display, me.Ship.Gun.Name, x+wid, y);
-          Globals.Font.Color = !menuGun ? Colors.White : Colors.LtGrey;
-          Globals.Font.Render(display, String.Format("Special: {0}", me.Ship.Special.Name), x, y+Globals.Font.LineSkip);
-        }
-        break;
-      case State.MaybeQuit:
-        Globals.Font.Color = Colors.White;
-        Globals.Font.Center(display, "Press [escape] again to quit");
-        break;
-    }
   }
 
   public bool DoTicks()
   { uint time = GameLib.Timing.Ticks;
-    bool did  = false;
-    if(netGame) CheckNetwork();
+    bool did  = updated;
     while(time>=nextTime)
-    { DoInput();
-      if(netGame || state==State.InPlay || state==State.BaseMenu) Advance();
+    { Advance();
       nextTime += timeInc;
-      if(netGame) CheckNetwork();
       did = true;
     }
+    updated = false;
     return did;
   }
-  
-  public void DoInput()
-  { switch(State)
-    { case TriangleChase.State.InPlay:
-        if(me.Ship.Dead && (Keyboard.PressedRel(Key.Return) || Keyboard.PressedRel(Key.Space)))
-          me.Ship.Spawn(FindSpawnPoint());
-        if(me.Ship.Health>0)
-        { if(Keyboard.Pressed(Key.Left))
-          { me.Ship.Rotate(-me.Ship.TurnAcc++);
-            if(me.Ship.TurnAcc>me.Ship.MaxTurn) me.Ship.TurnAcc=me.Ship.MaxTurn;
-          }
-          if(Keyboard.Pressed(Key.Right))
-          { me.Ship.Rotate(me.Ship.TurnAcc++);
-            if(me.Ship.TurnAcc>me.Ship.MaxTurn) me.Ship.TurnAcc=me.Ship.MaxTurn;
-          }
-          if(Keyboard.Pressed(Key.Up)) me.Ship.Accelerate();
-          if(Keyboard.Pressed(Key.LCtrl)) me.Ship.Fire();
-          if(Keyboard.Pressed(Key.Space)) me.Ship.UseSpecial();
-          
-          if(me.Ship.OnBase && Keyboard.PressedRel(Key.Return)) State = State.BaseMenu;
-        }
-        if(Keyboard.PressedRel(Key.Escape)) State = State.MaybeQuit;
-        break;
 
-      case TriangleChase.State.BaseMenu:
-        while(keys.Count>0)
-        { KeyboardEvent kb = (KeyboardEvent)keys.Dequeue();
-          if(!kb.Down) continue;
-          if(kb.Key==Key.Up || kb.Key==Key.Down) menuGun = !menuGun;
-          else if(kb.Key==Key.Left)
-          { if(menuGun) me.Ship.Gun = PrevWeapon(me.Ship.Gun, guns);
-            else me.Ship.Special = PrevWeapon(me.Ship.Special, specials);
-          }
-          else if(kb.Key==Key.Right)
-          { if(menuGun) me.Ship.Gun = NextWeapon(me.Ship.Gun, guns);
-            else me.Ship.Special = NextWeapon(me.Ship.Special, specials);
-          }
-          else if(kb.Key==Key.Escape || kb.Key==Key.Return) { State=lastState; break; }
-        }
-        break;
-      
-      case TriangleChase.State.MaybeQuit:
-        while(keys.Count>0)
-        { KeyboardEvent kb = (KeyboardEvent)keys.Dequeue();
-          if(!kb.Down) continue;
-          if(kb.Key==Key.Escape) GameLib.Events.Events.PushEvent(new GameLib.Events.QuitEvent());
-          else State=lastState;
-          break;
-        }
-        break;
-    }
-  }
-  
-  public void Advance()
-  { for(LinkedList.Node node = objects.Head; node!=null; node=node.NextNode)
-    { GameObject o = (GameObject)node.Data;
-      if(o.Remove) continue;
-      o.Think();
-      o.CalcVel();
-      o.Move();
-      o.Age++;
-    }
-    foreach(Player p in players)
-    { p.Ship.Think();
-      if(!p.Ship.Dead)
-      { p.Ship.CalcVel();
-        p.Ship.Move();
-        if(p.Ship.IsHitMap) p.Ship.HitMap();
-      }
-      else if(!netGame && p!=Me) p.Ship.Spawn(FindSpawnPoint());
-    }
-    
-    for(LinkedList.Node node = objects.Head; node!=null; node=node.NextNode)
-    { GameObject o = (GameObject)node.Data;
-      if(o.Remove) continue;
-      if(o.IsHitMap) o.HitMap();
-      if(o.CanHitObjs)
-        foreach(GameObject oo in objects)
-        { if(oo.Remove || oo==o) continue;
-          if(o.Intersects(oo)) o.HitObject(oo);
-        }
-      if(o.Remove) continue;
-      foreach(Player p in players)
-        if(p.Ship.Health>0 && o.Intersects(p.Ship)) o.HitShip(p.Ship);
-    }
-    if((tick&0x1F)==0) // GC every 32 ticks
-    { LinkedList.Node cur = objects.Head, next;
-      while(cur!=null)
-      { next = cur.NextNode;
-        if(((GameObject)cur.Data).Remove) { objects.Remove(cur); nObjects--; }
-        cur = next;
-      }
-    }
-
-    tick++;
-  }
-  
   public void Explode(Ship owner, Explosion type, VectorF pos)
   { ExpData data = expData[(int)type];
     int[]    num = new int[4];
@@ -294,16 +152,57 @@ public class World
         AddObject(o);
       }
   }
-  
+
   public void RemoveCircle(int x, int y, int radius)
   { Primitives.FilledCircle(fore, x, y, radius, Colors.Transparent);
     Primitives.FilledCircle(over, x, y, radius, 255);
   }
 
-  public void AddGun(Type gun) { guns.Add(gun); }
-  public void AddSpecial(Type gun) { specials.Add(gun); }
-  public Weapon MakeGun(Ship ship, int index) { return MakeWeapon(ship, index, guns); }
-  public Weapon MakeSpecial(Ship ship, int index) { return MakeWeapon(ship, index, specials); }
+  void Advance()
+  { for(LinkedList.Node node = objects.Head; node!=null; node=node.NextNode)
+    { GameObject o = (GameObject)node.Data;
+      if(o.Remove) continue;
+      o.Think();
+      o.CalcVel();
+      o.Move();
+      o.Age++;
+    }
+    foreach(Player p in players)
+    { p.Ship.Think();
+      if(!p.Ship.Dead)
+      { p.Ship.CalcVel();
+        p.Ship.Move();
+        if(p.Ship.IsHitMap) p.Ship.HitMap();
+      }
+    }
+    
+    for(LinkedList.Node node = objects.Head; node!=null; node=node.NextNode)
+    { GameObject o = (GameObject)node.Data;
+      if(o.Remove) continue;
+      if(o.IsHitMap) o.HitMap();
+      if(o.CanHitObjs)
+        foreach(GameObject oo in objects)
+        { if(oo.Remove || oo==o) continue;
+          if(o.Intersects(oo)) o.HitObject(oo);
+        }
+      if(o.Remove) continue;
+      foreach(Player p in players)
+        if(p.Ship.Health>0 && o.Intersects(p.Ship)) o.HitShip(p.Ship);
+    }
+    if((tick&0x1F)==0) // GC every 32 ticks
+    { LinkedList.Node cur = objects.Head, next;
+      while(cur!=null)
+      { next = cur.NextNode;
+        GameObject o = (GameObject)cur.Data;
+        if(o.Remove && o.NetPolicy!=NetPolicy.RemoteAll) RemoveObject(o.ID);
+        cur = next;
+      }
+    }
+
+    tick++;
+  }
+
+  VectorF FindSpawnPoint() { return new VectorF(60, 50); }
 
   class ExpData
   { public ExpData(int[] lows, int[] highs, int radius) { Lows=lows; Highs=highs; Radius=radius; }
@@ -311,49 +210,14 @@ public class World
     public int Radius;
   }
 
-  VectorF FindSpawnPoint() { return new VectorF(60, 50); }
-  Weapon PrevWeapon(Weapon weap, ArrayList weaps) { return NextWeapon(weap, weaps, -1); }
-  Weapon NextWeapon(Weapon weap, ArrayList weaps) { return NextWeapon(weap, weaps, 1); }
-  Weapon NextWeapon(Weapon weap, ArrayList weaps, int offset)
-  { int index = weaps.IndexOf(weap.GetType())+offset;
-    if(index<0) index=weaps.Count-1;
-    else if(index>=weaps.Count) index=0;
-    Weapon newWeap = MakeWeapon(me.Ship, index, weaps);
-    newWeap.Ammo = newWeap.Ammo*weap.Ammo/(weap.MaxAmmo*2);
-    return newWeap;
-  }
-  Weapon MakeWeapon(Ship ship, int index, ArrayList weaps)
-  { return (Weapon)((Type)weaps[index]).GetConstructor(new Type[] { typeof(Ship) }).Invoke(new object[] { ship });
-  }
-  
-  void SetKeyHandler(bool handler)
-  { if(handler)
-    { if(keyHandler==null)
-      { keyHandler = new KeyPressHandler(OnKey);
-        Keyboard.KeyPress += keyHandler;
-      }
-    }
-    else if(keyHandler!=null)
-    { Keyboard.KeyPress -= keyHandler;
-      keyHandler = null;
-      keys.Clear();
-    }
-  }
-  
-  void OnKey(KeyboardEvent e) { keys.Enqueue(e); Keyboard.Release(e.Key); }
-
-  void CheckNetwork()
-  {
-  }
-
-  ArrayList  players = new ArrayList(), circles = new ArrayList(), guns = new ArrayList(), specials = new ArrayList();
-  LinkedList objects = new LinkedList();
-  Queue      keys    = new Queue();
-  Player     me;
-  GameObject focus;
+  ArrayList  players  = new ArrayList();
+  LinkedList objects  = new LinkedList();
+  Hashtable  objIndex = new Hashtable();
   Surface    fore, back, over;
-  KeyPressHandler keyHandler;
-  ExpData[]  expData = new ExpData[6]
+  uint  tick, nextTime, timeInc=33, tps=30, nextObj;
+  bool  updated;
+
+  static readonly ExpData[] expData = new ExpData[6]
   { new ExpData(new int[] { 0,   1,  0, 0 }, new int[] { 2,   1,  1,  0 }, 4),
     new ExpData(new int[] { 3,   1,  1, 0 }, new int[] { 6,   3,  3,  0 }, 10),
     new ExpData(new int[] { 10,  4,  2, 1 }, new int[] { 18,  6,  5,  2 }, 20),
@@ -361,9 +225,6 @@ public class World
     new ExpData(new int[] { 25, 10,  8, 4 }, new int[] { 40, 18, 14,  8 }, 50),
     new ExpData(new int[] { 50, 20, 16, 8 }, new int[] {150, 36, 28, 16 }, 70),
   };
-  uint  tick, nextTime, timeInc=33, tps=30;
-  State state, lastState;
-  bool  menuGun=true, netGame;
 }
 
 } // namespace TriangleChase

@@ -43,11 +43,11 @@ public class CannonBall : SpriteAmmo
 { public CannonBall(Ship owner, VectorF pos, VectorF vel) : base(owner, pos, vel, 3, Sprite.CannonBall) { Weight=25; }
   public override float CalcDamage(Ship ship, VectorF vec) { return base.CalcDamage(ship, vec)+10; }
   public override void HitMap()
-  { App.World.Explode(owner, Explosion.Tiny, Pos);
+  { world.Explode(owner, Explosion.Tiny, Pos);
     base.HitMap();
   }
   public override void HitShip(Ship ship)
-  { App.World.Explode(owner, Explosion.Tiny, Pos);
+  { world.Explode(owner, Explosion.Tiny, Pos);
     base.HitShip(ship);
   }
 }
@@ -58,19 +58,19 @@ public class Grenade : SpriteAmmo
     RadiusSqr=8;
   }
   public override void HitMap()
-  { App.World.Explode(owner, Explosion.Tiny, Pos);
+  { world.Explode(owner, Explosion.Tiny, Pos);
     base.HitMap();
   }
   public override float CalcDamage(Ship ship, VectorF vec) { return base.CalcDamage(ship, vec)+20; }
   public override void Think()
-  { if(Age>App.World.TPS/2)
+  { if(Age>world.TPS/2)
     { Remove=true;
       for(int a=0; a<256; a+=Globals.Random.Next(8))
       { VectorF v = Globals.Vector(a);
         for(int n=0; n<2; n++)
         { int cn = Globals.Random.Next(3); if(cn>2) cn=2;
-          App.World.AddObject(new Bullet(owner, Pos+v*((float)Globals.Random.NextDouble()*4),
-                                         Vel+v*((float)Globals.Random.NextDouble()/2), owner.ColorMap[cn]));
+          world.AddObject(new Bullet(owner, Pos+v*((float)Globals.Random.NextDouble()*4),
+                                     Vel+v*((float)Globals.Random.NextDouble()/2), owner.ColorMap[cn]));
         }
       }
     }
