@@ -18,21 +18,22 @@ public sealed class App
 
     Video.Initialize();
     Input.Initialize(false);
-    Video.SetMode(400, 300, 32, SurfaceFlag.Fullscreen);
+    Video.SetMode(400, 300, 32);//, SurfaceFlag.Fullscreen);
     Globals.InitGraphics();
     Client = new Client();
-    Client.Connect(Server.LocalEndPoint);
+    Client.Connect(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, Server.DefaultPort), "Adam", Team.Green);
 
     try
-    { while(true)
+    { bool quit = false;
+      do
       { Event e;
-        while((e=Events.NextEvent(0))!=null) if(!ProcessEvent(e)) break;
+        while((e=Events.NextEvent(0))!=null) if(!ProcessEvent(e)) quit=true;
         if(Server!=null) Server.DoTicks();
         if(Client!=null && Client.DoTicks())
         { Client.Render(Video.DisplaySurface);
           Video.Flip();
         }
-      }
+      } while(!quit);
     }
     finally
     { if(Client!=null) Client.Disconnect();

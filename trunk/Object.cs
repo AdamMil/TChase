@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using GameLib.Mathematics;
 using GameLib.Video;
+using GameLib.IO;
 
 namespace TriangleChase
 {
@@ -9,7 +10,7 @@ namespace TriangleChase
 public enum NetPolicy { Unknown, Local, LocalProp, RemoteAdd, RemoteAll }
 
 #region GameObject
-public abstract class GameObject
+public abstract class GameObject : GameLib.Network.INetSerializeable
 { public float X  { get { return Pos.X; } }
   public float Y  { get { return Pos.Y; } }
   public int   RX { get { return (int)Math.Round(Pos.X); } }
@@ -22,6 +23,26 @@ public abstract class GameObject
 
   public abstract bool IsHitMap  { get; }
   public abstract bool IsHitBase { get; }
+  
+  public unsafe virtual int SizeOf() { return sizeof(float)*4+sizeof(uint)+sizeof(int); }
+  
+  public unsafe virtual void SerializeTo(byte[] buf, int index)
+  { IOH.WriteLE4  (buf, index, (int)ID); index += 4;
+    IOH.WriteLE4  (buf, index, Angle);   index += 4;
+    IOH.WriteFloat(buf, index, Pos.X);   index += sizeof(float);
+    IOH.WriteFloat(buf, index, Pos.Y);   index += sizeof(float);
+    IOH.WriteFloat(buf, index, Vel.X);   index += sizeof(float);
+    IOH.WriteFloat(buf, index, Vel.Y);
+  }
+  
+  public unsafe virtual void DeserializeFrom(byte[] buf, int index)
+  { ID    = IOH.ReadLE4U (buf, index); index += 4;
+    Angle = IOH.ReadLE4  (buf, index); index += 4;
+    Pos.X = IOH.ReadFloat(buf, index); index += sizeof(float);
+    Pos.Y = IOH.ReadFloat(buf, index); index += sizeof(float);
+    Vel.X = IOH.ReadFloat(buf, index); index += sizeof(float);
+    Vel.Y = IOH.ReadFloat(buf, index);
+  }
 
   public VectorF Pos, Vel;
   public uint    ID;
@@ -119,6 +140,19 @@ public abstract class SphereObject : GameObject
   }
   
   public int RadiusSqr;
+
+  public override int SizeOf() { return base.SizeOf()+3; }
+  public override void SerializeTo(byte[] buf, int index)
+  { buf[index++] = (byte)Radius;
+    IOH.WriteLE2(buf, index, (short)RadiusSqr); index += 2;
+    base.SerializeTo(buf, index);
+  }
+  public override void DeserializeFrom(byte[] buf, int index)
+  { radius    = buf[index++];
+    RadiusSqr = IOH.ReadLE2(buf, index); index += 2;
+    base.DeserializeFrom(buf, index);
+  }
+
   protected int radius;
 }
 #endregion
@@ -202,9 +236,28 @@ public class Exploder : SphereObject
 }
 #endregion
 
-#region AfterburnerFlame
-public class AfterburnerFlame : GameObject
-{ public AfterburnerFlame(Ship ship) { this.ship=ship; NetPolicy=NetPolicy.LocalProp; }
+#region ShipAttachments
+public abstract class ShipAttachment : GameObject
+{ protected ShipAttachment() { }
+  protected ShipAttachment(Ship ship) { this.ship=ship; }
+
+  public override int SizeOf() { return base.SizeOf()+4; }
+  public override void SerializeTo(byte[] buf, int index)
+  { IOH.WriteLE4(buf, index, (int)ship.ID); index += 4;
+    base.SerializeTo(buf, index);
+  }
+  public override void DeserializeFrom(byte[] buf, int index)
+  { ship = world.FindShip(IOH.ReadLE4U(buf, index)); index += 4;
+    base.DeserializeFrom(buf, index);
+  }
+
+  protected Ship ship;
+}
+
+public class AfterburnerFlame : ShipAttachment
+{ public AfterburnerFlame() { NetPolicy=NetPolicy.LocalProp; }
+  public AfterburnerFlame(Ship ship) : base(ship) { NetPolicy=NetPolicy.LocalProp; }
+
   public override bool IsHitMap  { get { return false; } }
   public override bool IsHitBase { get { return false; } }
   public override void HitShip(Ship ship) { }
@@ -219,8 +272,6 @@ public class AfterburnerFlame : GameObject
         x3=(int)v3.X+x, y3=(int)v3.Y+y;
     Primitives.TriangleAA(dest, x1, y1, x2, y2, x3, y3, Color.FromArgb(0, 128, 192));
   }
-
-  protected Ship ship;
 }
 #endregion
 
@@ -251,7 +302,7 @@ public class Ship : SphereObject
   }
 
   public override float CalcDamage(Ship ship, VectorF vel)
-  { return ship==this ? Momentum/8 : base.CalcDamage(ship, vel);
+  { return ship==this ? Momentum/10 : base.CalcDamage(ship, vel);
   }
 
   public override void HitMap()
@@ -272,11 +323,11 @@ public class Ship : SphereObject
     if(Gun!=null) Gun.Think();
     if(Special!=null) Special.Think();
     if(Health<=0) Health--;
-    else if(OnBase)
+    else if(OnBase && world.IsServer)
     { if(Resting)
         if((sbyte)Angle<0) Angle++;
         else if((sbyte)Angle>0) Angle--;
-      if(Health++>MaxHealth) Health=MaxHealth;
+      if(++Health>MaxHealth) Health=MaxHealth;
       Reload(Gun);
       Reload(Special);
       if((Fuel+=2)>MaxFuel) Fuel=MaxFuel;
@@ -288,7 +339,7 @@ public class Ship : SphereObject
   { if(Fuel>0) Fuel--;
     else if(Health>0) Health--;
     else return;
-    AddFlame();
+    if(!world.IsServer) AddFlame();
     AddVelocity(Vector*AccelMult);
     Resting = OnBase = false;
   }
@@ -296,7 +347,7 @@ public class Ship : SphereObject
   public void Fire() { if(Gun!=null) Gun.Fire(); }
   public void UseSpecial() { if(Special!=null) Special.Fire(); }
   
-  public void Spawn(VectorF pos) // TODO: think about this
+  public void Spawn(VectorF pos)
   { Init();
     Pos=pos;
     Vel=new VectorF();
@@ -305,8 +356,8 @@ public class Ship : SphereObject
   public void ApplyKeys(InputMessage.Key keys)
   { if((keys&InputMessage.Key.Turn)!=0)
     { if(++TurnAcc>MaxTurn) TurnAcc=MaxTurn;
-      if((keys&InputMessage.Key.Left)!=0) Angle -= MaxTurn;
-      if((keys&InputMessage.Key.Left)!=0) Angle += MaxTurn;
+      if((keys&InputMessage.Key.Left)!=0)  Angle -= TurnAcc;
+      if((keys&InputMessage.Key.Right)!=0) Angle += TurnAcc;
     }
     else TurnAcc=0;
 
@@ -335,7 +386,7 @@ public class Ship : SphereObject
   }
 
   protected void AddFlame()
-  { world.AddObject(new FlameSpark(Pos-Vector*(Size/2-3), Vel+Globals.Vector(Angle+Globals.Random.Next(29)+114),
+  { world.AddObject(new FlameSpark(Pos-Vector*(Size/2-3), Vel-Globals.Vector(Angle+Globals.Random.Next(129)-64)*.1f,
                                    Globals.Random.Next(4)+9, Health<MaxHealth/4 ? Colors.LtGrey : Colors.DkBlue));
   }
   

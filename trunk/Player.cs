@@ -6,7 +6,8 @@ namespace TriangleChase
 {
 
 public class Player
-{ public Player(string name, Team team, ServerPlayer link) { Name=name; Team=team; Link=link; }
+{ public Player(string name, Team team) { Name=name; Team=team; Link=null; }
+  public Player(string name, Team team, ServerPlayer link) { Name=name; Team=team; Link=link; }
 
   public Team Team
   { get { return team; }
@@ -24,8 +25,9 @@ public class Player
   public string Name;
   public ServerPlayer Link;
   public InputMessage.Key Inputs;
+  public bool LoggedIn;
 
-  Team   team;
+  Team team;
 }
 
 } // namespace TriangleChase

@@ -14,10 +14,7 @@ public enum Sprite
 }
 
 public class Globals
-{ static Globals()
-  { for(int i=0; i<256; i++) vects[i] = new VectorF(0, -1).RotatedZ(i);
-    Font.RenderStyle = RenderStyle.Blended;
-  }
+{ static Globals() { for(int i=0; i<256; i++) vects[i] = new VectorF(0, -1).RotatedZ(i); }
 
   public static string  DataPath
   { get { return System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetEntryAssembly().Location)+'/'
@@ -43,6 +40,7 @@ public class Globals
     }
     
     Font = new TrueTypeFont(DataPath+"arial.ttf", 10);
+    Font.RenderStyle = RenderStyle.Blended;
   }
 
   static VectorF[] vects = new VectorF[256];
