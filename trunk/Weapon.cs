@@ -23,7 +23,8 @@ public class MachineGun : Weapon
 
   public override void Fire()
   { if(Reload==0 && Ammo>0)
-    { App.World.AddObject(new Bullet(ship, ship.Pos+ship.Vector*(ship.Size/2+1), ship.Vel+ship.Vector*3));
+    { if(ship.World.IsServer)
+        ship.World.AddObject(new Bullet(ship, ship.Pos+ship.Vector*(ship.Size/2+1), ship.Vel+ship.Vector*3));
       Ammo--; Reload=2;
     }
   }
@@ -38,8 +39,10 @@ public class DualMachineGun : Weapon
   { if(Reload==0 && Ammo>0)
     { VectorF vel = ship.Vel+ship.Vector*3;
       int wid = ship.Size/2-3, hei = -ship.Size/2-1;
-      App.World.AddObject(new Bullet(ship, ship.Pos+new VectorF(-wid, hei).RotatedZ(ship.Angle), vel));
-      App.World.AddObject(new Bullet(ship, ship.Pos+new VectorF( wid, hei).RotatedZ(ship.Angle), vel));
+      if(ship.World.IsServer)
+      { ship.World.AddObject(new Bullet(ship, ship.Pos+new VectorF(-wid, hei).RotatedZ(ship.Angle), vel));
+        ship.World.AddObject(new Bullet(ship, ship.Pos+new VectorF( wid, hei).RotatedZ(ship.Angle), vel));
+      }
       if((Ammo-=2)<0) Ammo=0;
       Reload = 3;
     }
@@ -54,8 +57,10 @@ public class FBMachineGun : Weapon
   public override void Fire()
   { if(Reload==0 && Ammo>0)
     { VectorF vel=ship.Vector*2.5f, pos=ship.Vector*(ship.Size/2+1);
-      App.World.AddObject(new Bullet(ship, ship.Pos+pos, ship.Vel+vel));
-      App.World.AddObject(new Bullet(ship, ship.Pos-pos, ship.Vel-vel));
+      if(ship.World.IsServer)
+      { ship.World.AddObject(new Bullet(ship, ship.Pos+pos, ship.Vel+vel));
+        ship.World.AddObject(new Bullet(ship, ship.Pos-pos, ship.Vel-vel));
+      }
       if((Ammo-=2)<0) Ammo=0;
       Reload = 2;
     }
@@ -72,8 +77,9 @@ public class WavyMachineGun : Weapon
   public override void Fire()
   { if(Reload==0 && Ammo>0)
     { int mul = ship.Size/2;
-      App.World.AddObject(new Bullet(ship, ship.Pos+new VectorF((float)(mul*SineTable.Sin(count++<<5)), -mul-1).RotatedZ(ship.Angle),
-                                     ship.Vel+ship.Vector*3));
+      VectorF pos = new VectorF((float)(mul*SineTable.Sin(count++<<5)), -mul-1).RotatedZ(ship.Angle);
+      if(ship.World.IsServer)
+        ship.World.AddObject(new Bullet(ship, ship.Pos+pos, ship.Vel+ship.Vector*3));
       Ammo--;
       Reload = 2;
     }
@@ -87,7 +93,8 @@ public class Cannon : Weapon
   public override string Name { get { return "Cannon"; } }
   public override void Fire()
   { if(Reload==0 && Ammo>0)
-    { App.World.AddObject(new CannonBall(ship, ship.Pos+ship.Vector*(ship.Size/2+1), ship.Vel+ship.Vector*3));
+    { if(ship.World.IsServer)
+        ship.World.AddObject(new CannonBall(ship, ship.Pos+ship.Vector*(ship.Size/2+1), ship.Vel+ship.Vector*3));
       Ammo--;
       Reload = 30;
       ship.Vel -= ship.Vector*0.6f; // recoil
@@ -100,7 +107,8 @@ public class GrenadeLauncher : Weapon
   public override string Name { get { return "Grenade Launcher"; } }
   public override void Fire()
   { if(Reload==0 && Ammo>0)
-    { App.World.AddObject(new Grenade(ship, ship.Pos+ship.Vector*(ship.Size/2+1), ship.Vel+ship.Vector*2));
+    { if(ship.World.IsServer)
+        ship.World.AddObject(new Grenade(ship, ship.Pos+ship.Vector*(ship.Size/2+1), ship.Vel+ship.Vector*2));
       Ammo--;
       Reload = 40;
     }
@@ -116,12 +124,12 @@ public class Afterburner : Weapon
       ship.Resting = ship.OnBase = false;
       Ammo--;
     }
-    fired = App.World.Tick;
+    fired = ship.World.Tick;
   }
   public override void Think()
-  { bool fire = Ammo>0 && fired==App.World.Tick;
+  { bool fire = Ammo>0 && fired==ship.World.Tick;
     if(fire!=firing)
-    { if(fire) App.World.AddObject(obj=new AfterburnerFlame(ship));
+    { if(fire) ship.World.AddObject(obj=new AfterburnerFlame(ship));
       else obj.Remove=true;
       firing = fire;
     }

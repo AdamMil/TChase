@@ -6,6 +6,9 @@ using GameLib.Video;
 namespace TriangleChase
 {
 
+public enum NetPolicy { Unknown, Local, LocalProp, RemoteAdd, RemoteAll }
+
+#region GameObject
 public abstract class GameObject
 { public float X  { get { return Pos.X; } }
   public float Y  { get { return Pos.Y; } }
@@ -13,21 +16,28 @@ public abstract class GameObject
   public int   RY { get { return (int)Math.Round(Pos.Y); } }
   public float XV { get { return Vel.X; } }
   public float YV { get { return Vel.Y; } }
+  public World World { get { return world; } set { world=value; } }
 
   public float Momentum { get { return Vel.LengthSqr*Weight; } }
+
+  public abstract bool IsHitMap  { get; }
+  public abstract bool IsHitBase { get; }
+
+  public VectorF Pos, Vel;
+  public uint    ID;
+  public int     Angle, Weight, Age;
+  public NetPolicy NetPolicy;
+  public bool    Remove, NoGrav, CanHitObjs;
 
   public void AddVelocity(float xv, float yv) { Vel.X+=xv; Vel.Y+=yv; }
   public void AddVelocity(VectorF v) { Vel+=v; }
   public void Move() { Pos+=Vel; }
   public void Rotate(int angle) { Angle += angle; }
 
-  public abstract bool IsHitMap  { get; }
-  public abstract bool IsHitBase { get; }
-
   public virtual  void HitMap() { Remove=true; }
   public virtual  void HitShip(Ship ship) { Impact(ship); Remove=true; }
   public virtual  void HitObject(GameObject obj) { }
-  public virtual  void CalcVel() { AddVelocity(App.World.Gravity); }
+  public virtual  void CalcVel() { AddVelocity(world.Gravity); }
   public abstract bool Intersects(GameObject obj);
   public virtual  void Think() { }
   public abstract void Draw(Surface dest, int cx, int cy);
@@ -50,20 +60,20 @@ public abstract class GameObject
     }
   }
 
-  public VectorF Pos, Vel;
-  public int     Angle, Weight, Age;
-  public bool    Remove, NoGrav, CanHitObjs;
+  protected World world;
   
   protected void CenterBlit(Surface dest, Surface src, int cx, int cy) { src.Blit(dest, RX-cx-src.Width/2, RY-cy-src.Height/2); }
 }
+#endregion
 
+#region PointObject and SphereObject
 public abstract class PointObject : GameObject
 { public PointObject() { }
   public PointObject(int x, int y, float xv, float yv) { Pos=new VectorF(x, y); Vel=new VectorF(xv, yv); }
   public PointObject(VectorF pos, VectorF vel) { Pos=pos; Vel=vel; }
   
-  public override bool IsHitMap  { get { return App.World.HitMap(RX, RY); } }
-  public override bool IsHitBase { get { return App.World.HitBase(RX, RY); } }
+  public override bool IsHitMap  { get { return world.HitMap(RX, RY); } }
+  public override bool IsHitBase { get { return world.HitBase(RX, RY); } }
   
   public override bool Intersects(GameObject o)
   { if(o is PointObject) return RX==o.RX && RY==o.RY;
@@ -89,15 +99,15 @@ public abstract class SphereObject : GameObject
   public override bool IsHitMap
   { get
     { int x=RX, y=RY, rad=radius-1;
-      return App.World.HitMap(x, y)     || App.World.HitMap(x-rad, y) || App.World.HitMap(x+rad, y) ||
-             App.World.HitMap(x, y-rad) || App.World.HitMap(x, y+rad);
+      return world.HitMap(x, y)     || world.HitMap(x-rad, y) || world.HitMap(x+rad, y) ||
+             world.HitMap(x, y-rad) || world.HitMap(x, y+rad);
     }
   }
   public override bool IsHitBase
   { get
     { int x=RX, y=RY, rad=radius-1;
-      return App.World.HitBase(x, y)     || App.World.HitBase(x-rad, y) || App.World.HitBase(x+rad, y) ||
-             App.World.HitBase(x, y-rad) || App.World.HitBase(x, y+rad);
+      return world.HitBase(x, y)     || world.HitBase(x-rad, y) || world.HitBase(x+rad, y) ||
+             world.HitBase(x, y-rad) || world.HitBase(x, y+rad);
     }
   }
 
@@ -111,7 +121,9 @@ public abstract class SphereObject : GameObject
   public int RadiusSqr;
   protected int radius;
 }
+#endregion
 
+#region Spark and FlameSpark
 public class Spark : PointObject
 { public Spark() { Life=100; Color=Color.Magenta; }
   public Spark(VectorF pos, VectorF vel, int life, Color color) { Pos=pos; Vel=vel; Life=life; Color=color; }
@@ -125,7 +137,9 @@ public class Spark : PointObject
 }
 
 public class FlameSpark : Spark
-{ public FlameSpark(VectorF pos, VectorF vel, int life, Color color) : base(pos, vel, life, color) { }
+{ public FlameSpark(VectorF pos, VectorF vel, int life, Color color) : base(pos, vel, life, color)
+  { NetPolicy = NetPolicy.Local;
+  }
   public override void Think()
   { if(--Life==0) Remove=true;
     else if(Life<7 && Color.Equals(Colors.LtGrey)) Color=Colors.DkGrey;
@@ -134,7 +148,9 @@ public class FlameSpark : Spark
     else if(Life<4 && Color.Equals(Colors.Orange)) Color=Colors.Red;
   }
 }
+#endregion
 
+#region Exploder
 public class Exploder : SphereObject
 { public Exploder(int type)
   { NoGrav = true;
@@ -144,12 +160,12 @@ public class Exploder : SphereObject
   }
   public override void CalcVel() { } // no gravity
 
-  public override void HitMap() { App.World.RemoveCircle(RX, RY, Radius); Vel=new VectorF(); }
+  public override void HitMap() { world.RemoveCircle(RX, RY, Radius); Vel=new VectorF(); }
 
   public override void HitShip(Ship ship)
   { if(HitDelay==0 && Activate<=0)
     { Impact(ship, false, Types[Type].Damage);
-      HitDelay = (int)(App.World.TPS/2);
+      HitDelay = (int)(world.TPS/2);
     }
   }
 
@@ -165,7 +181,7 @@ public class Exploder : SphereObject
     if(Age==Types[Type].Ages[Stage]) Stage++;
     if(Stage==Types[Type].Ages.Length)
     { Remove=true;
-      App.World.RemoveCircle(RX, RY, Radius);
+      world.RemoveCircle(RX, RY, Radius);
     }
   }
 
@@ -184,9 +200,11 @@ public class Exploder : SphereObject
     new ExpType(new int[] { 0, 4, 5, 6, 7 }, new int[] { 3, 6, 10, 16, 25 }, 5, 20, 60),
   };
 }
+#endregion
 
+#region AfterburnerFlame
 public class AfterburnerFlame : GameObject
-{ public AfterburnerFlame(Ship ship) { this.ship=ship; }
+{ public AfterburnerFlame(Ship ship) { this.ship=ship; NetPolicy=NetPolicy.LocalProp; }
   public override bool IsHitMap  { get { return false; } }
   public override bool IsHitBase { get { return false; } }
   public override void HitShip(Ship ship) { }
@@ -204,10 +222,12 @@ public class AfterburnerFlame : GameObject
 
   protected Ship ship;
 }
+#endregion
 
+#region Ship
 public class Ship : SphereObject
-{ public Ship() { Init(); }
-  
+{ public Ship() { Init(); NetPolicy=NetPolicy.RemoteAll; }
+
   public VectorF Vector { get { return Globals.Vector(Angle); } }
   public Color   Color  { get { return ColorMap[2]; } }
 
@@ -234,8 +254,6 @@ public class Ship : SphereObject
   { return ship==this ? Momentum/8 : base.CalcDamage(ship, vel);
   }
 
-public override void CalcVel() { if(this==App.World.Me.Ship) base.CalcVel(); }
-
   public override void HitMap()
   { Impact(this, true);
     Vel = -Vel/5;
@@ -246,8 +264,8 @@ public override void CalcVel() { if(this==App.World.Me.Ship) base.CalcVel(); }
 
   public override void Think()
   { if(Dead) return;
-    if(Health<-App.World.TPS*3)
-    { App.World.Explode(this, OnBase ? Explosion.Medium : Explosion.Huge, Pos);
+    if(Health<-world.TPS*3)
+    { world.Explode(this, OnBase ? Explosion.Medium : Explosion.Huge, Pos);
       Dead = true;
     }
 
@@ -278,12 +296,23 @@ public override void CalcVel() { if(this==App.World.Me.Ship) base.CalcVel(); }
   public void Fire() { if(Gun!=null) Gun.Fire(); }
   public void UseSpecial() { if(Special!=null) Special.Fire(); }
   
-  public void Spawn(VectorF pos)
+  public void Spawn(VectorF pos) // TODO: think about this
   { Init();
     Pos=pos;
     Vel=new VectorF();
-    Gun=App.World.MakeGun(this, 0);
-    Special=App.World.MakeSpecial(this, 0);
+  }
+
+  public void ApplyKeys(InputMessage.Key keys)
+  { if((keys&InputMessage.Key.Turn)!=0)
+    { if(++TurnAcc>MaxTurn) TurnAcc=MaxTurn;
+      if((keys&InputMessage.Key.Left)!=0) Angle -= MaxTurn;
+      if((keys&InputMessage.Key.Left)!=0) Angle += MaxTurn;
+    }
+    else TurnAcc=0;
+
+    if((keys&InputMessage.Key.Accel)!=0)   Accelerate();
+    if((keys&InputMessage.Key.Fire)!=0)    Fire();
+    if((keys&InputMessage.Key.Special)!=0) UseSpecial();
   }
 
   public Weapon Gun, Special;
@@ -306,12 +335,12 @@ public override void CalcVel() { if(this==App.World.Me.Ship) base.CalcVel(); }
   }
 
   protected void AddFlame()
-  { App.World.AddObject(new FlameSpark(Pos-Vector*(Size/2-3), Vel+Globals.Vector(Angle+Globals.Random.Next(29)+114),
-                                       Globals.Random.Next(4)+9, Health<MaxHealth/4 ? Colors.LtGrey : Colors.DkBlue));
+  { world.AddObject(new FlameSpark(Pos-Vector*(Size/2-3), Vel+Globals.Vector(Angle+Globals.Random.Next(29)+114),
+                                   Globals.Random.Next(4)+9, Health<MaxHealth/4 ? Colors.LtGrey : Colors.DkBlue));
   }
   
   protected void Reload(Weapon weap)
-  { if(weap!=null && weap.Ammo<weap.MaxAmmo && (weap.FillDelay==0 || App.World.Tick%(weap.FillDelay+1)==0))
+  { if(weap!=null && weap.Ammo<weap.MaxAmmo && (weap.FillDelay==0 || world.Tick%(weap.FillDelay+1)==0))
     { weap.Ammo += weap.FillCount;
       if(weap.Ammo>weap.MaxAmmo) weap.Ammo=weap.MaxAmmo;
     }
@@ -319,5 +348,6 @@ public override void CalcVel() { if(this==App.World.Me.Ship) base.CalcVel(); }
 
   protected VectorF OldPos;
 }
+#endregion
 
 } // namespace TriangleChase

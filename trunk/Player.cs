@@ -1,13 +1,12 @@
 using System;
 using System.Drawing;
+using GameLib.Network;
 
 namespace TriangleChase
 {
 
 public class Player
-{ public Player() { Name="UNNAMED"; Team=Team.Green; }
-  public Player(string name) { Name=name; Team=Team.Green; }
-  public Player(string name, Team team) { Name=name; Team=team; }
+{ public Player(string name, Team team, ServerPlayer link) { Name=name; Team=team; Link=link; }
 
   public Team Team
   { get { return team; }
@@ -23,6 +22,9 @@ public class Player
 
   public Ship   Ship = new Ship();
   public string Name;
+  public ServerPlayer Link;
+  public InputMessage.Key Inputs;
+
   Team   team;
 }
 

@@ -23,22 +23,26 @@ public class Globals
   { get { return System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetEntryAssembly().Location)+'/'
 +"../../"; } // TODO: fixme
   }
+  public static string MapPath { get { return DataPath; } }
+  public static string SpritePath { get { return DataPath; } }
 
   public static Random  Random = new Random();
-  public static TrueTypeFont Font = new TrueTypeFont(DataPath+"arial.ttf", 10);
+  public static TrueTypeFont Font;
 
   public static VectorF Vector(int angle) { return vects[angle&0xFF]; }
   public static Surface Sprite(TriangleChase.Sprite which) { return sprites[(int)which]; }
 
-  public static void InitSprites()
+  public static void InitGraphics()
   { string[] fn = new string[(int)TriangleChase.Sprite.Num]
     { "cannonball.png", "grenade.png",
       "exp1.png", "exp2.png", "exp3.png", "exp4.png", "exp5.png", "exp6.png", "exp7.png", "exp8.png"
     };
     for(int i=0; i<sprites.Length; i++)
-    { sprites[i] = new Surface(DataPath+fn[i]).CloneDisplay(false);
+    { sprites[i] = new Surface(SpritePath+fn[i]).CloneDisplay(false);
       sprites[i].SetColorKey(Colors.Transparent);
     }
+    
+    Font = new TrueTypeFont(DataPath+"arial.ttf", 10);
   }
 
   static VectorF[] vects = new VectorF[256];
