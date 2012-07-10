@@ -1,11 +1,11 @@
 using System;
-using System.Collections;
-using System.Drawing;
+using System.Collections.Generic;
 using GameLib.Events;
 using GameLib.Input;
 using GameLib.Video;
 using GameLib.Network;
-using GameLib.Collections;
+using AdamMil.Mathematics.Geometry;
+using GameLib;
 
 namespace TriangleChase
 {
@@ -14,10 +14,11 @@ public enum State { Connecting, Loading, ConnFailed, InPlay, BaseMenu, MaybeQuit
 
 public class Client : NetBase
 { public Client()
-  { client = new GameLib.Network.Client();
-    client.Disconnected += new DisconnectHandler(client_Disconnected);
-    client.MessageReceived += new ClientReceivedHandler(client_MessageReceived);
-    client.RegisterTypes(messageTypes);
+  {
+    client = new GameLib.Network.Client() { UseThread = false };
+    client.Disconnected += client_Disconnected;
+    client.MessageReceived += client_MessageReceived;
+    client.MessageConverter.RegisterTypes(messageTypes);
   }
   
   public State State
@@ -30,7 +31,7 @@ public class Client : NetBase
     }
   }
 
-  public bool Connected { get { return client.Connected; } }
+  public bool IsConnected { get { return client.IsConnected; } }
 
   public void Connect(System.Net.IPEndPoint server, string name, Team team)
   { Disconnect();
@@ -39,7 +40,7 @@ public class Client : NetBase
     messages.Clear();
 
     client.Connect(server);
-    client.Send(new LoginMessage(name, team), SendFlag.ReliableSequential);
+    client.Send(new LoginMessage(name, team), SendFlag.Reliable);
   }
 
   public void Disconnect()
@@ -50,12 +51,14 @@ public class Client : NetBase
   }
   
   public bool DoTicks()
-  { DoInput();
+  {
+    client.Poll();
+    DoInput();
     return world.Loaded ? world.DoTicks() : true;
   }
 
-  public void Send(Message msg, SendFlag flags) { client.Send(msg, flags, 0); }
-  public void Send(Message msg, SendFlag flags, uint timeoutMs) { client.Send(msg, flags, timeoutMs); }
+  public void Send(Message msg, SendFlag flags) { Send(msg, flags, 0); }
+  public void Send(Message msg, SendFlag flags, int timeoutMs) { client.Send(msg, flags, timeoutMs); }
 
   public void Render(Surface display)
   { if(world.Loaded) world.Render(display);
@@ -65,10 +68,10 @@ public class Client : NetBase
     { int bx=4, by=3, bw=40, bh=2, hw=bw*me.Ship.Health/me.Ship.MaxHealth, fw=bw*me.Ship.Fuel/me.Ship.MaxFuel,
           gw=me.Ship.Gun==null ? 0 : bw*me.Ship.Gun.Ammo/me.Ship.Gun.MaxAmmo,
           sw=me.Ship.Special==null ? 0 : bw*me.Ship.Special.Ammo/me.Ship.Special.MaxAmmo;
-      if(hw>0) Primitives.FilledBox(display, bx, by, bx+hw, by+bh, Colors.LtRed);
-      if(fw>0) Primitives.FilledBox(display, bx, by+bh+2,   bx+fw, by+bh*2+2, Colors.LtBlue);
-      if(gw>0) Primitives.FilledBox(display, bx, by+bh*2+4, bx+gw, by+bh*3+4, Colors.Green);
-      if(sw>0) Primitives.FilledBox(display, bx, by+bh*3+6, bx+sw, by+bh*4+6, Colors.LtGrey);
+      if(hw>0) Shapes.FilledBox(display, bx, by, bx+hw, by+bh, Colors.LtRed);
+      if(fw>0) Shapes.FilledBox(display, bx, by+bh+2,   bx+fw, by+bh*2+2, Colors.LtBlue);
+      if(gw>0) Shapes.FilledBox(display, bx, by+bh*2+4, bx+gw, by+bh*3+4, Colors.Green);
+      if(sw>0) Shapes.FilledBox(display, bx, by+bh*3+6, bx+sw, by+bh*4+6, Colors.LtGrey);
     }
 
     { int x=display.Width-5, y=0;
@@ -77,24 +80,25 @@ public class Client : NetBase
         { int wid = Globals.Font.CalculateSize(p.Name).Width;
           Globals.Font.Color = p.Ship.Color;
           Globals.Font.Render(display, p.Name, x-wid, y);
-          y += Globals.Font.LineSkip;
+          y += Globals.Font.LineHeight;
         }
     }
 
     lock(messages)
-    { LinkedList.Node node = messages.Head;
+    {
+      LinkedListNode<TextMessage> node = messages.First;
       if(node!=null)
       { int i=0, y=0;
-        bool shift = world.Tick>lastMsgTime+((TextMessage)node.Data).Text.Length*world.TPS/15; // assume 15 cps reading
+        bool shift = world.Tick>lastMsgTime+(node.Value).Text.Length*world.TPS/15; // assume 15 cps reading
         do
-        { TextMessage msg = (TextMessage)node.Data;
-          Globals.Font.Color = msg.Color;
-          Globals.Font.Center(display, msg.Text, y);
-          y += Globals.Font.LineSkip;
-          node = node.NextNode;
+        {
+          Globals.Font.Color = node.Value.Color;
+          Globals.Font.Center(display, node.Value.Text, y);
+          y += Globals.Font.LineHeight;
+          node = node.Next;
         }
         while(node!=null && ++i<3);
-        if(shift) messages.Remove(messages.Head);
+        if(shift) messages.Remove(messages.First);
       }
     }
 
@@ -102,7 +106,7 @@ public class Client : NetBase
     { case State.InPlay:
         Globals.Font.Color = Colors.White;
         if(me.Ship.Dead) Globals.Font.Center(display, "Press [space] to respawn!");
-        else if(me.Ship.OnBase && me.Ship.Health>0) Globals.Font.CenterOff(display, "Press [enter] to dock", -50);
+        else if(me.Ship.OnBase && me.Ship.Health>0) Globals.Font.Center(display, "Press [enter] to dock", (display.Height-Globals.Font.LineHeight)/2 - 50);
         break;
       case State.BaseMenu:
         { int x=10, y=120, wid = Globals.Font.CalculateSize("Special: ").Width;
@@ -110,7 +114,7 @@ public class Client : NetBase
           Globals.Font.Render(display, "Gun:", x, y);
           Globals.Font.Render(display, me.Ship.Gun.Name, x+wid, y);
           Globals.Font.Color = !menuGun ? Colors.White : Colors.LtGrey;
-          Globals.Font.Render(display, String.Format("Special: {0}", me.Ship.Special.Name), x, y+Globals.Font.LineSkip);
+          Globals.Font.Render(display, String.Format("Special: {0}", me.Ship.Special.Name), x, y+Globals.Font.LineHeight);
         }
         break;
       case State.Connecting:
@@ -148,27 +152,27 @@ public class Client : NetBase
   public void DoInput()
   { switch(State)
     { case TriangleChase.State.InPlay:
-        if(me.Ship.Dead && (Keyboard.PressedRel(Key.Return) || Keyboard.PressedRel(Key.Space)))
-          Send(new SpawnMeMessage(), SendFlag.ReliableSequential);
+        if(me.Ship.Dead && (Keyboard.PressedRel(Key.Enter) || Keyboard.PressedRel(Key.Space)))
+          Send(new SpawnMeMessage(), SendFlag.Reliable);
         if(me.Ship.Health>0)
         { InputMessage.Key state = InputMessage.Key.None;
-          if(Keyboard.Pressed(Key.Left))  state |= InputMessage.Key.Left;
-          if(Keyboard.Pressed(Key.Right)) state |= InputMessage.Key.Right;
-          if(Keyboard.Pressed(Key.Up))    state |= InputMessage.Key.Accel;
-          if(Keyboard.Pressed(Key.LCtrl)) state |= InputMessage.Key.Fire;
-          if(Keyboard.Pressed(Key.Space)) state |= InputMessage.Key.Special;
+          if(Keyboard.Pressed(Key.Left))     state |= InputMessage.Key.Left;
+          if(Keyboard.Pressed(Key.Right))    state |= InputMessage.Key.Right;
+          if(Keyboard.Pressed(Key.Up))       state |= InputMessage.Key.Accel;
+          if(Keyboard.Pressed(Key.LeftCtrl)) state |= InputMessage.Key.Fire;
+          if(Keyboard.Pressed(Key.Space))    state |= InputMessage.Key.Special;
           if(state != me.Inputs && State==State.InPlay)
           { me.Inputs = state;
-            Send(new InputMessage(me.Inputs=state), SendFlag.ReliableSequential|SendFlag.HighPriority);
+            Send(new InputMessage(me.Inputs=state), SendFlag.Reliable|SendFlag.HighPriority);
           }
-          if(me.Ship.OnBase && Keyboard.PressedRel(Key.Return)) State = State.BaseMenu;
+          if(me.Ship.OnBase && Keyboard.PressedRel(Key.Enter)) State = State.BaseMenu;
         }
         if(Keyboard.PressedRel(Key.Escape)) State = State.MaybeQuit;
         break;
 
       case TriangleChase.State.BaseMenu:
         while(keys.Count>0)
-        { KeyboardEvent kb = (KeyboardEvent)keys.Dequeue();
+        { KeyboardEvent kb = keys.Dequeue();
           bool changed = false;
           if(kb.Key==Key.Up || kb.Key==Key.Down) menuGun = !menuGun;
           else if(kb.Key==Key.Left)
@@ -181,21 +185,21 @@ public class Client : NetBase
             else me.Ship.Special = NextWeapon(me.Ship.Special, specials);
             changed = true;
           }
-          else if(kb.Key==Key.Escape || kb.Key==Key.Return)
+          else if(kb.Key==Key.Escape || kb.Key==Key.Enter)
           { changed = true;
             State=lastState;
           }
           if(changed)
             Send(new UpdateWeapsMessage(me.Ship.Gun.Ammo, me.Ship.Special.Ammo, FindGun(me.Ship.Gun),
                                         FindSpecial(me.Ship.Special)),
-                 SendFlag.ReliableSequential);
+                 SendFlag.Reliable);
           if(State==lastState) break;
         }
         break;
       
       case TriangleChase.State.Connecting: case TriangleChase.State.Loading:
         while(keys.Count>0)
-        { KeyboardEvent kb = (KeyboardEvent)keys.Dequeue();
+        { KeyboardEvent kb = keys.Dequeue();
           if(kb.Key==Key.Escape) Disconnect();
         }
         break;
@@ -235,12 +239,12 @@ public class Client : NetBase
   void SetKeyHandler(bool handler)
   { if(handler)
     { if(keyHandler==null)
-      { keyHandler = new KeyPressHandler(OnKey);
-        Keyboard.KeyPress += keyHandler;
+      { keyHandler = OnKey;
+        Keyboard.KeyEvent += keyHandler;
       }
     }
     else if(keyHandler!=null)
-    { Keyboard.KeyPress -= keyHandler;
+    { Keyboard.KeyEvent -= keyHandler;
       keyHandler = null;
       keys.Clear();
     }
@@ -248,14 +252,14 @@ public class Client : NetBase
   
   void AddMessage(string message) { AddMessage(Colors.White, message); }
   void AddMessage(string format, params object[] args) { AddMessage(Colors.White, String.Format(format, args)); }
-  void AddMessage(Color color, string message) { lock(messages) messages.Append(new TextMessage(color, message)); }
+  void AddMessage(Color color, string message) { lock(messages) messages.AddLast(new TextMessage(color, message)); }
   void AddMessage(Color color, string format, params object[] args) { AddMessage(color, String.Format(format, args)); }
 
-  void OnKey(KeyboardEvent e) { if(e.Down) { keys.Enqueue(e); Keyboard.Release(e.Key); } }
+  void OnKey(KeyboardEvent e) { if(e.Down) { keys.Enqueue(e); Keyboard.Press(e.Key, false); } }
 
-  Weapon PrevWeapon(Weapon weap, ArrayList weaps) { return NextWeapon(weap, weaps, -1); }
-  Weapon NextWeapon(Weapon weap, ArrayList weaps) { return NextWeapon(weap, weaps, 1); }
-  Weapon NextWeapon(Weapon weap, ArrayList weaps, int offset)
+  Weapon PrevWeapon(Weapon weap, List<Type> weaps) { return NextWeapon(weap, weaps, -1); }
+  Weapon NextWeapon(Weapon weap, List<Type> weaps) { return NextWeapon(weap, weaps, 1); }
+  Weapon NextWeapon(Weapon weap, List<Type> weaps, int offset)
   { int index = weaps.IndexOf(weap.GetType())+offset;
     if(index<0) index=weaps.Count-1;
     else if(index>=weaps.Count) index=0;
@@ -267,13 +271,16 @@ public class Client : NetBase
   void client_Disconnected(object sender) { State = State.Disconnected; }
 
   void client_MessageReceived(GameLib.Network.Client client, object msg)
-  { switch(((Message)msg).Type)
+  {
+    switch(((Message)msg).Type)
     { case MessageType.UpdateShips:
-      { UpdateShipsMessage m = (UpdateShipsMessage)msg;
+      { 
+        UpdateShipsMessage m = (UpdateShipsMessage)msg;
         foreach(UpdateShipsMessage.Update u in m.Updates)
-        { Ship ship  = world.FindShip(u.ShipID);
-          ship.Pos   = new GameLib.Mathematics.VectorF(u.X,  u.Y);
-          ship.Vel   = new GameLib.Mathematics.VectorF(u.XV, u.YV);
+        {
+          Ship ship  = world.FindShip(u.ShipID);
+          ship.Pos   = new Vector2(u.X,  u.Y);
+          ship.Vel   = new Vector2(u.XV, u.YV);
           ship.Angle = u.Angle;
           foreach(Player p in world.Players) if(p.Ship==ship) { p.Inputs=u.Inputs; break; }
         }
@@ -314,14 +321,14 @@ public class Client : NetBase
         { MapInfoMessage m = (MapInfoMessage)msg;
 
           world.Load(m.MapName, false);
-          world.Gravity = new GameLib.Mathematics.VectorF(m.GravityX, m.GravityY);
+          world.Gravity = new Vector2(m.GravityX, m.GravityY);
 
           ClearWeapons();
           foreach(Type type in m.Guns)     AddGun(type);
           foreach(Type type in m.Specials) AddSpecial(type);
 
           Start();
-          Send(new LoadedMessage(), SendFlag.ReliableSequential);
+          Send(new LoadedMessage(), SendFlag.Reliable);
         }
         break;
 
@@ -329,8 +336,8 @@ public class Client : NetBase
       { JoinedMessage m = (JoinedMessage)msg;
         Player p   = new Player(m.Name, m.Team);
         p.Ship.ID  = m.ShipID;
-        p.Ship.Pos = new GameLib.Mathematics.VectorF(m.X,  m.Y);
-        p.Ship.Vel = new GameLib.Mathematics.VectorF(m.XV, m.YV);
+        p.Ship.Pos = new Vector2(m.X,  m.Y);
+        p.Ship.Vel = new Vector2(m.XV, m.YV);
         p.Inputs   = m.Inputs;
         p.Ship.Gun = MakeGun(p.Ship, 0);
         p.Ship.Special = MakeSpecial(p.Ship, 0);
@@ -351,14 +358,14 @@ public class Client : NetBase
   int  serverVersion;
   uint myID, lastMsgTime;
 
-  Queue keys = new Queue();
-  KeyPressHandler keyHandler;
+  Queue<KeyboardEvent> keys = new Queue<KeyboardEvent>();
+  KeyEventHandler keyHandler;
 
   GameLib.Network.Client client;
   
   Player me;
 
-  LinkedList messages = new LinkedList();
+  LinkedList<TextMessage> messages = new LinkedList<TextMessage>();
   State state, lastState;
   bool  menuGun;
 }

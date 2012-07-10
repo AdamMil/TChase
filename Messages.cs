@@ -1,8 +1,8 @@
 using System;
-using System.Collections;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using GameLib.Network;
-using GameLib.IO;
+using AdamMil.IO;
 
 namespace TriangleChase
 {
@@ -74,62 +74,52 @@ public class LoginReturnMessage : Message
 }
 
 [StructLayout(LayoutKind.Sequential, Pack=1)]
-public class MapInfoMessage : Message, INetSerializeable
+public class MapInfoMessage : Message, INetSerializable
 { public MapInfoMessage() : base(MessageType.MapInfo) { }
-  public MapInfoMessage(World world, string mapName, ICollection gunTypes, ICollection specialTypes)
+  public MapInfoMessage(World world, string mapName, ICollection<Type> gunTypes, ICollection<Type> specialTypes)
     : base(MessageType.MapInfo)
-  { GravityX=world.Gravity.X; GravityY=world.Gravity.Y;
+  { GravityX = world.Gravity.X; GravityY = world.Gravity.Y;
     Guns = new Type[gunTypes.Count];
     gunTypes.CopyTo(Guns, 0);
     Specials = new Type[specialTypes.Count];
     specialTypes.CopyTo(Specials, 0);
     MapName  = mapName;
   }
-  public float  GravityX, GravityY;
+  public double GravityX, GravityY;
   public Type[] Guns, Specials;
   public string MapName;
 
-  public unsafe int SizeOf()
-  { int length = sizeof(float)*2+MapName.Length+3; // 3 is namelen, gunslen, specialslen
-    foreach(Type type in Guns)     { length += type.ToString().Length+1; }
-    foreach(Type type in Specials) { length += type.ToString().Length+1; }
-    return length;
+  public void Serialize(BinaryWriter writer, out System.IO.Stream attachedStream)
+  {
+    attachedStream = null;
+    writer.Write(GravityX);
+    writer.Write(GravityY);
+    writer.WriteStringWithLength(MapName);
+    writer.WriteEncoded(Guns.Length);
+    foreach(Type type in Guns) WriteGun(writer, type);
+    writer.WriteEncoded(Specials.Length);
+    foreach(Type type in Specials) WriteGun(writer, type);
   }
 
-  public unsafe void SerializeTo(byte[] buf, int index)
-  { IOH.WriteFloat(buf, index, GravityX); index += sizeof(float);
-    IOH.WriteFloat(buf, index, GravityY); index += sizeof(float);
-    byte[] bytes = System.Text.Encoding.ASCII.GetBytes(MapName);
-    buf[index++] = (byte)bytes.Length;
-    Array.Copy(bytes, 0, buf, index, bytes.Length); index += bytes.Length;
-    buf[index++] = (byte)Guns.Length;
-    foreach(Type type in Guns) index = WriteGun(type, buf, index);
-    buf[index++] = (byte)Specials.Length;
-    foreach(Type type in Specials) index = WriteGun(type, buf, index);
+  public unsafe void Deserialize(BinaryReader reader, System.IO.Stream attachedStream)
+  {
+    GravityX = reader.ReadDouble();
+    GravityY = reader.ReadDouble();
+    MapName  = reader.ReadStringWithLength();
+    Guns     = new Type[reader.ReadEncodedInt32()];
+    for(int i=0; i<Guns.Length; i++) Guns[i] = ReadGun(reader);
+    Specials = new Type[reader.ReadEncodedInt32()];
+    for(int i=0; i<Specials.Length; i++) Specials[i] = ReadGun(reader);
   }
 
-  public unsafe void DeserializeFrom(byte[] buf, int index)
-  { GravityX = IOH.ReadFloat(buf, index); index += sizeof(float);
-    GravityY = IOH.ReadFloat(buf, index); index += sizeof(float);
-    int namelen = buf[index++];
-    MapName = System.Text.Encoding.ASCII.GetString(buf, index, namelen); index += namelen;
-    Guns = new Type[buf[index++]];
-    for(int i=0; i<Guns.Length; i++) Guns[i] = ReadGun(buf, ref index);
-    Specials = new Type[buf[index++]];
-    for(int i=0; i<Specials.Length; i++) Specials[i] = ReadGun(buf, ref index);
-  }
-
-  int WriteGun(Type type, byte[] buf, int index)
-  { byte[] bytes = System.Text.Encoding.ASCII.GetBytes(type.ToString());
-    buf[index++] = (byte)bytes.Length;
-    Array.Copy(bytes, 0, buf, index, bytes.Length); index += bytes.Length;
-    return index;
+  void WriteGun(BinaryWriter writer, Type type)
+  {
+    writer.WriteStringWithLength(type.ToString());
   }
   
-  Type ReadGun(byte[] buf, ref int index)
-  { byte[] name = new byte[buf[index++]];
-    Array.Copy(buf, index, name, 0, name.Length); index += name.Length;
-    return System.Type.GetType(System.Text.Encoding.ASCII.GetString(name));
+  Type ReadGun(BinaryReader reader)
+  { 
+    return System.Type.GetType(reader.ReadStringWithLength());
   }
 }
 
@@ -138,7 +128,7 @@ public class JoinedMessage : Message
 { public JoinedMessage() : base(MessageType.Joined) { }
   public JoinedMessage(Player p) : base(MessageType.Joined)
   { string name = p.Name.Length>64 ? p.Name.Substring(0, 64) : p.Name;
-    X=p.Ship.Pos.X; Y=p.Ship.Pos.Y; XV=p.Ship.Vel.X; YV=p.Ship.Vel.Y; Inputs=p.Inputs;
+    X = (float)p.Ship.Pos.X; Y = (float)p.Ship.Pos.Y; XV = (float)p.Ship.Vel.X; YV = (float)p.Ship.Vel.Y; Inputs=p.Inputs;
     Team    = p.Team;
     ShipID  = p.Ship.ID;
     NameLen = (byte)name.Length;
@@ -164,25 +154,26 @@ public class LeftMessage : Message
 }
 
 [StructLayout(LayoutKind.Sequential, Pack=1)]
-public class AddObjectMessage : Message, INetSerializeable
+public class AddObjectMessage : Message, INetSerializable
 { public AddObjectMessage() : base(MessageType.AddObject) { }
   public AddObjectMessage(GameObject o) : base(MessageType.AddObject) { Object=o; }
   
   public GameObject Object;
 
-  public int SizeOf() { return Object.SizeOf()+1; }
-  public void SerializeTo(byte[] buf, int index)
-  { buf[index++] = App.Server.FindObject(Object);
-    Object.SerializeTo(buf, index);
+  public void Serialize(BinaryWriter writer, out System.IO.Stream attachedStream)
+  {
+    writer.Write(App.Server.FindObject(Object));
+    Object.Serialize(writer, out attachedStream);
   }
-  public void DeserializeFrom(byte[] buf, int index)
-  { Object = App.Client.MakeObject(buf[index++]);
-    Object.DeserializeFrom(buf, index);
+  public void Deserialize(BinaryReader reader, System.IO.Stream attachedStream)
+  { 
+    Object = App.Client.MakeObject(reader.ReadByte());
+    Object.Deserialize(reader, attachedStream);
   }
 }
 
 [StructLayout(LayoutKind.Sequential, Pack=1)]
-public class UpdateShipsMessage : Message, INetSerializeable
+public class UpdateShipsMessage : Message, INetSerializable
 { public UpdateShipsMessage() : base(MessageType.UpdateShips) { }
   public UpdateShipsMessage(World world) : base(MessageType.UpdateShips) { this.world=world; }
 
@@ -194,38 +185,37 @@ public class UpdateShipsMessage : Message, INetSerializeable
   }
   public Update[] Updates;
 
-  public unsafe int SizeOf()
-  { int count = 0;
+  public unsafe void Serialize(BinaryWriter writer, out System.IO.Stream attachedStream)
+  {
+    attachedStream = null;
+    int count = 0;
     foreach(Player p in world.Players) if(p.LoggedIn) count++;
-    return count*(sizeof(float)*4 + sizeof(int)*2 + 1) + 1;
-  }
-
-  public unsafe void SerializeTo(byte[] buf, int index)
-  { int count = 0;
-    foreach(Player p in world.Players) if(p.LoggedIn) count++;
-    buf[index++] = (byte)count;
+    writer.WriteEncoded(count);
     foreach(Player p in world.Players)
       if(p.LoggedIn)
-      { IOH.WriteLE4(buf, index, (int)p.Ship.ID); index += 4;
-        IOH.WriteFloat(buf, index, p.Ship.Pos.X); index += sizeof(float);
-        IOH.WriteFloat(buf, index, p.Ship.Pos.Y); index += sizeof(float);
-        IOH.WriteFloat(buf, index, p.Ship.Vel.X); index += sizeof(float);
-        IOH.WriteFloat(buf, index, p.Ship.Vel.Y); index += sizeof(float);
-        IOH.WriteLE4(buf, index, p.Ship.Angle); index += 4;
-        buf[index++] = (byte)p.Inputs;
+      {
+        writer.WriteEncoded(p.Ship.ID);
+        writer.Write((float)p.Ship.Pos.X);
+        writer.Write((float)p.Ship.Pos.Y);
+        writer.Write((float)p.Ship.Vel.X);
+        writer.Write((float)p.Ship.Vel.Y);
+        writer.Write((byte)p.Ship.Angle);
+        writer.Write((byte)p.Inputs);
       }
   }
 
-  public unsafe void DeserializeFrom(byte[] buf, int index)
-  { Updates = new Update[buf[index++]];
+  public unsafe void Deserialize(BinaryReader reader, System.IO.Stream attachedStream)
+  { 
+    Updates = new Update[reader.ReadEncodedInt32()];
     for(int i=0; i<Updates.Length; i++)
-    { Updates[i].ShipID = IOH.ReadLE4U(buf, index);  index += 4;
-      Updates[i].X      = IOH.ReadFloat(buf, index); index += sizeof(float);
-      Updates[i].Y      = IOH.ReadFloat(buf, index); index += sizeof(float);
-      Updates[i].XV     = IOH.ReadFloat(buf, index); index += sizeof(float);
-      Updates[i].YV     = IOH.ReadFloat(buf, index); index += sizeof(float);
-      Updates[i].Angle  = IOH.ReadLE4(buf, index);   index += 4;
-      Updates[i].Inputs = (InputMessage.Key)buf[index++];
+    {
+      Updates[i].ShipID = reader.ReadEncodedUInt32();
+      Updates[i].X      = reader.ReadSingle();
+      Updates[i].Y      = reader.ReadSingle();
+      Updates[i].XV     = reader.ReadSingle();
+      Updates[i].YV     = reader.ReadSingle();
+      Updates[i].Angle  = reader.ReadByte();
+      Updates[i].Inputs = (InputMessage.Key)reader.ReadByte();
     }
   }
   

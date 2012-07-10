@@ -1,5 +1,4 @@
-using System;
-using GameLib.Mathematics;
+using AdamMil.Mathematics.Geometry;
 
 namespace TriangleChase
 {
@@ -37,11 +36,15 @@ public class DualMachineGun : Weapon
 
   public override void Fire()
   { if(Reload==0 && Ammo>0)
-    { VectorF vel = ship.Vel+ship.Vector*3;
+    { Vector2 vel = ship.Vel+ship.Vector*3;
       int wid = ship.Size/2-3, hei = -ship.Size/2-1;
       if(ship.World.IsServer)
-      { App.Server.AddObject(new Bullet(ship, ship.Pos+new VectorF(-wid, hei).RotatedZ(ship.Angle), vel));
-        App.Server.AddObject(new Bullet(ship, ship.Pos+new VectorF( wid, hei).RotatedZ(ship.Angle), vel));
+      {
+        Vector2 vect = Globals.Vector(ship.Angle);
+        vect.X *= wid;
+        vect.Y *= hei;
+        App.Server.AddObject(new Bullet(ship, ship.Pos+new Vector2(-vect.X, vect.Y), vel));
+        App.Server.AddObject(new Bullet(ship, ship.Pos+new Vector2( vect.X, vect.Y), vel));
       }
       if((Ammo-=2)<0) Ammo=0;
       Reload = 3;
@@ -56,7 +59,7 @@ public class FBMachineGun : Weapon
 
   public override void Fire()
   { if(Reload==0 && Ammo>0)
-    { VectorF vel=ship.Vector*2.5f, pos=ship.Vector*(ship.Size/2+1);
+    { Vector2 vel=ship.Vector*2.5f, pos=ship.Vector*(ship.Size/2+1);
       if(ship.World.IsServer)
       { App.Server.AddObject(new Bullet(ship, ship.Pos+pos, ship.Vel+vel));
         App.Server.AddObject(new Bullet(ship, ship.Pos-pos, ship.Vel-vel));
@@ -75,9 +78,14 @@ public class WavyMachineGun : Weapon
   public override string Name { get { return "Wavy Gun"; } }
 
   public override void Fire()
-  { if(Reload==0 && Ammo>0)
-    { int mul = ship.Size/2;
-      VectorF pos = new VectorF((float)(mul*SineTable.Sin(count++<<5)), -mul-1).RotatedZ(ship.Angle);
+  { 
+    if(Reload==0 && Ammo>0)
+    {
+      const float Scale = 0.7854f;
+      int mul = ship.Size/2;
+      Vector2 pos = Globals.Vector(ship.Angle);
+      pos.X *= mul*(float)System.Math.Sin(count++*Scale);
+      pos.Y *= -mul-1;
       if(ship.World.IsServer)
         App.Server.AddObject(new Bullet(ship, ship.Pos+pos, ship.Vel+ship.Vector*3));
       Ammo--;
