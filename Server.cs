@@ -1,5 +1,5 @@
 using System;
-using System.Collections;
+using System.Collections.Generic;
 using GameLib.Network;
 
 namespace TriangleChase
@@ -10,9 +10,9 @@ public class Server : NetBase
 
   public Server()
   { server = new GameLib.Network.Server();
-    server.MessageReceived += new ServerReceivedHandler(server_MessageReceived);
-    server.PlayerDisconnected += new PlayerDisconnectHandler(server_PlayerDisconnected);
-    server.RegisterTypes(messageTypes);
+    server.MessageReceived += server_MessageReceived;
+    server.PlayerDisconnected += server_PlayerDisconnected;
+    server.MessageConverter.RegisterTypes(messageTypes);
   }
 
   public System.Net.IPEndPoint LocalEndPoint { get { return server.LocalEndPoint; } }
@@ -29,9 +29,9 @@ public class Server : NetBase
     MaxPlayers = (max=="" ? 8 : int.Parse(max));
 
     System.Xml.XmlNode disallowed = xml.SelectSingleNode("map/disallow");
-    Hashtable badTypes = new Hashtable();
+    HashSet<string> badTypes = new HashSet<string>();
     if(disallowed!=null)
-      foreach(System.Xml.XmlNode node in disallowed.ChildNodes) badTypes[node.InnerText] = true;
+      foreach(System.Xml.XmlNode node in disallowed.ChildNodes) badTypes.Add(node.InnerText);
 
     foreach(Type type in gunTypes)     if(!badTypes.Contains(type.ToString())) AddGun(type);
     foreach(Type type in specialTypes) if(!badTypes.Contains(type.ToString())) AddSpecial(type);
@@ -53,7 +53,8 @@ public class Server : NetBase
   public void Start(int port) { server.Listen(port); }
 
   public void Stop()
-  { server.Close();
+  {
+    server.Deinitialize();
     players.Clear(); guns.Clear(); specials.Clear();
     Unload();
   }
@@ -65,22 +66,25 @@ public class Server : NetBase
       { UpdateShipsMessage usm = new UpdateShipsMessage(world);
         foreach(Player p in players.Values)
           if(p.LoggedIn)
-          { Send(p, usm, SendFlag.None, 66);
+          { 
+            Send(p, usm, SendFlag.None, 66);
             Send(p, new UpdateShipMessage(p), SendFlag.None, 66);
           }
       }
     }
   }
 
-  public void Send(Message msg, SendFlag flags) { server.Send(null, msg, flags, 0); }
-  public void Send(Message msg, SendFlag flags, uint timeoutMs) { server.Send(null, msg, flags, timeoutMs); }
+  public void Send(Message msg, SendFlag flags) { Send(msg, flags, 0); }
+  public void Send(Message msg, SendFlag flags, int timeoutMs) { server.SendToAll(msg, flags, timeoutMs); }
   public void Send(Player player, Message msg, SendFlag flags) { server.Send(player.Link, msg, flags, 0); }
-  public void Send(Player player, Message msg, SendFlag flags, uint timeoutMs)
-  { server.Send(player.Link, msg, flags, timeoutMs);
+  public void Send(Player player, Message msg, SendFlag flags, int timeoutMs)
+  {
+    server.Send(player.Link, msg, flags, timeoutMs);
   }
   public void SendExcept(Player player, Message msg, SendFlag flags) { SendExcept(player, msg, flags, 0); }
-  public void SendExcept(Player player, Message msg, SendFlag flags, uint timeoutMs)
-  { ArrayList list = new ArrayList(players.Count);
+  public void SendExcept(Player player, Message msg, SendFlag flags, int timeoutMs)
+  { 
+    List<ServerPlayer> list = new List<ServerPlayer>(players.Count);
     foreach(Player p in players.Values) if(p.LoggedIn && p!=player) list.Add(p.Link);
     if(list.Count>0) server.Send(list, msg, flags, timeoutMs);
   }
@@ -97,9 +101,9 @@ public class Server : NetBase
   { MessageType mtype = ((Message)msg).Type;
     Player      p = null;
 
-    if(mtype!=MessageType.Login)
-    { p = (Player)players[player];
-      if(p==null) { server.DropPlayer(player); return; }
+    if(mtype != MessageType.Login)
+    {
+      if(!players.TryGetValue(player, out p)) { server.DropPlayer(player); return; }
     }
 
     switch(mtype)
@@ -115,9 +119,9 @@ public class Server : NetBase
           p.Ship.ID = world.NextID;
           lock(players) players[player] = p;
         }
-        server.Send(player, new LoginReturnMessage(status, p), SendFlag.ReliableSequential);
+        server.Send(player, new LoginReturnMessage(status, p), SendFlag.Reliable);
         if(status==LoginReturnMessage.Status.Success)
-          Send(p, new MapInfoMessage(world, MapFile, guns, specials), SendFlag.ReliableSequential);
+          Send(p, new MapInfoMessage(world, MapFile, guns, specials), SendFlag.Reliable);
         else server.DropPlayerDelayed(player, 5000);
         break;
       }
@@ -128,9 +132,9 @@ public class Server : NetBase
         p.Ship.Special = MakeSpecial(p.Ship, 0);
         world.AddPlayer(p);
         p.LoggedIn = true;
-        Send(new JoinedMessage(p), SendFlag.ReliableSequential);
+        Send(new JoinedMessage(p), SendFlag.Reliable);
         foreach(Player op in players.Values)
-          if(op!=p) Send(p, new JoinedMessage(op), SendFlag.ReliableSequential);
+          if(op!=p) Send(p, new JoinedMessage(op), SendFlag.Reliable);
         break;
       
       case MessageType.Input:
@@ -159,16 +163,15 @@ public class Server : NetBase
   }
 
   void server_PlayerDisconnected(GameLib.Network.Server server, ServerPlayer player)
-  { Player p = (Player)players[player];
-    if(p!=null)
+  { Player p;
+    if(players.TryGetValue(player, out p))
     { lock(players) players.Remove(player);
       lock(world) world.RemovePlayer(p);
-      Send(new LeftMessage(p), SendFlag.ReliableSequential);
+      Send(new LeftMessage(p), SendFlag.Reliable);
     }
   }
 
-  Hashtable players = new Hashtable();
-  ArrayList objects = new ArrayList();
+  Dictionary<ServerPlayer, Player> players = new Dictionary<ServerPlayer, Player>();
   GameLib.Network.Server server;
 }
 

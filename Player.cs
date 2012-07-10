@@ -1,5 +1,4 @@
-using System;
-using System.Drawing;
+using GameLib;
 using GameLib.Network;
 
 namespace TriangleChase

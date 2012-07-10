@@ -1,7 +1,6 @@
-using System;
-using GameLib.Video;
-using GameLib.Input;
 using GameLib.Events;
+using GameLib.Input;
+using GameLib.Video;
 
 namespace TriangleChase
 {
@@ -27,10 +26,11 @@ public sealed class App
     { bool quit = false;
       do
       { Event e;
-        while((e=Events.NextEvent(0))!=null) if(!ProcessEvent(e)) quit=true;
+        while((e=Events.NextEvent(0)) != null) if(!ProcessEvent(e)) quit=true;
         if(Server!=null) Server.DoTicks();
         if(Client!=null && Client.DoTicks())
-        { Client.Render(Video.DisplaySurface);
+        {
+          Client.Render(Video.DisplaySurface);
           Video.Flip();
         }
       } while(!quit);
@@ -47,9 +47,11 @@ public sealed class App
   }
 
   public static bool ProcessEvent(Event e)
-  { if(e is RepaintEvent) Video.Flip();
-    else if(e is QuitEvent) return false;
-    else if(e is ExceptionEvent) throw ((ExceptionEvent)e).Exception;
+  {
+    Input.ProcessEvent(e);
+    if(e.Type == EventType.Repaint) Video.Flip();
+    else if(e.Type == EventType.Quit) return false;
+    else if(e.Type == EventType.Exception) throw ((ExceptionEvent)e).Exception;
     return true;
   }
 

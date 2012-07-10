@@ -1,5 +1,5 @@
 using System;
-using System.Collections;
+using System.Collections.Generic;
 
 namespace TriangleChase
 {
@@ -25,11 +25,11 @@ public class NetBase
   protected byte FindSpecial(Weapon gun) { return (byte)specials.IndexOf(gun.GetType()); }
   protected Weapon MakeGun(Ship ship, int index) { return MakeWeapon(ship, index, guns); }
   protected Weapon MakeSpecial(Ship ship, int index) { return MakeWeapon(ship, index, specials); }
-  protected Weapon MakeWeapon(Ship ship, int index, ArrayList weaps)
-  { return (Weapon)((Type)weaps[index]).GetConstructor(new Type[] { typeof(Ship) }).Invoke(new object[] { ship });
+  protected Weapon MakeWeapon(Ship ship, int index, List<Type> weaps)
+  { return (Weapon)weaps[index].GetConstructor(new Type[] { typeof(Ship) }).Invoke(new object[] { ship });
   }
   
-  protected ArrayList guns = new ArrayList(), specials = new ArrayList();
+  protected List<Type> guns = new List<Type>(), specials = new List<Type>();
   protected static readonly Type[] gunTypes = new Type[]
   { typeof(MachineGun), typeof(DualMachineGun), typeof(FBMachineGun), typeof(WavyMachineGun)
   };

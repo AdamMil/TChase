@@ -1,9 +1,8 @@
 using System;
-using System.Drawing;
-using System.Collections;
+using System.Collections.Generic;
 using GameLib.Video;
-using GameLib.Collections;
-using GameLib.Mathematics;
+using AdamMil.Mathematics.Geometry;
+using Rectangle = System.Drawing.Rectangle;
 
 namespace TriangleChase
 {
@@ -21,9 +20,9 @@ public class World
   }
   public uint Tick { get { return tick; } }
   public bool Loaded;
-  public VectorF Gravity = new VectorF(0, 1f/30);
+  public Vector2 Gravity = new Vector2(0, 1f/30);
 
-  public ArrayList Players { get { return players; } }
+  public List<Player> Players { get { return players; } }
   public uint      NextID  { get { return nextObj++; } }
   
   public void Load(string mapname, bool server)
@@ -34,12 +33,17 @@ public class World
   public void Load(System.Xml.XmlDocument xml, bool server)
   { Unload();
     if(!server)
-    { fore = new Surface(Globals.MapPath+xml.DocumentElement.GetAttribute("fore")).CloneDisplay(false);
-      back = new Surface(Globals.MapPath+xml.DocumentElement.GetAttribute("back")).CloneDisplay(false);
-      fore.SetColorKey(Colors.Transparent);
+    {
+      string foreName = xml.DocumentElement.GetAttribute("fore"), backName = xml.DocumentElement.GetAttribute("back");
+      if(!string.IsNullOrEmpty(foreName))
+      {
+        fore = new Surface(Globals.MapPath+foreName).CloneDisplay(false);
+        fore.SetColorKey(Colors.Transparent);
+      }
+      if(!string.IsNullOrEmpty(backName)) back = new Surface(Globals.MapPath+backName).CloneDisplay(false);
     }
-    over = new Surface(Globals.MapPath+xml.DocumentElement.GetAttribute("overlay"));
-    
+    over = new Surface(Globals.MapPath+xml.DocumentElement.GetAttribute("map"));
+
     tick     = 0;
     nextObj  = 1;
     IsServer = server;
@@ -74,17 +78,21 @@ public class World
   public void AddObject(GameObject o, uint id)
   { o.ID    = id;
     o.World = this;
-    lock(objects) objIndex[id] = objects.Append(o);
+    lock(objects) objIndex[id] = objects.AddLast(o);
   }
   public void RemoveObject(GameObject o) { RemoveObject(o.ID); }
   public void RemoveObject(uint id)
-  { LinkedList.Node node = (LinkedList.Node)objIndex[id];
-    if(node==null) return;
-    lock(objects) { objIndex.Remove(node); objects.Remove(node); }
+  { 
+    LinkedListNode<GameObject> node;
+    if(objIndex.TryGetValue(id, out node))
+    {
+      lock(objects) { objIndex.Remove(id); objects.Remove(node); }
+    }
   }
   public GameObject FindObject(uint id)
-  { LinkedList.Node node = (LinkedList.Node)objIndex[id];
-    return node==null ? null : (GameObject)node.Data;
+  { 
+    LinkedListNode<GameObject> node;
+    return objIndex.TryGetValue(id, out node) ? node.Value : null;
   }
   public Ship FindShip(uint id)
   { lock(players) foreach(Player p in players) if(p.Ship.ID==id) return p.Ship;
@@ -92,7 +100,7 @@ public class World
   }
 
   public void Start()
-  { nextTime = GameLib.Timing.Ticks;
+  { nextTime = GameLib.Timing.Milliseconds;
     nextObj  = 1;
     updated  = false;
   }
@@ -103,19 +111,20 @@ public class World
     Rectangle frect = new Rectangle(camX-w, camY-h, camX+w, camY+h), brect = new Rectangle();
 
     if(frect.X<0) { frect.Width -= frect.X; frect.X=0; }
-    else if(frect.Width>fore.Width) { frect.X -= frect.Width-fore.Width; frect.Width=fore.Width; }
+    else if(frect.Width>over.Width) { frect.X -= frect.Width-over.Width; frect.Width=over.Width; }
     if(frect.Y<0) { frect.Height -= frect.Y; frect.Y=0; }
-    else if(frect.Height>fore.Height) { frect.Y -= frect.Height-fore.Height; frect.Height=fore.Height; }
+    else if(frect.Height>over.Height) { frect.Y -= frect.Height-over.Height; frect.Height=over.Height; }
 
     if(back!=null)
-    { w = fore.Width-display.Width;
+    { 
+      w = over.Width-display.Width;
       h = back.Width-display.Width;
       if(w<0) w=0;
       if(h<0) h=0;
       brect.X = w>0 && h>0 ? frect.X*h/w : 0;
       brect.Width = brect.X+display.Width;
       
-      w = fore.Height-display.Height;
+      w = over.Height-display.Height;
       h = back.Height-display.Height;
       if(w<0) w=0;
       if(h<0) h=0;
@@ -125,7 +134,8 @@ public class World
       back.Blit(display, brect, 0, 0);
     }
     else display.Fill();
-    fore.Blit(display, frect, 0, 0);
+
+    if(fore != null) fore.Blit(display, frect, 0, 0);
 
     display.Lock();
     lock(objects) foreach(GameObject o in objects) if(!o.Remove) o.Draw(display, frect.X, frect.Y);
@@ -134,7 +144,7 @@ public class World
   }
 
   public bool DoTicks()
-  { uint time = GameLib.Timing.Ticks;
+  { uint time = GameLib.Timing.Milliseconds;
     bool did  = updated;
     while(time>=nextTime)
     { Advance();
@@ -145,13 +155,13 @@ public class World
     return did;
   }
 
-  public void Explode(Ship owner, Explosion type, VectorF pos)
+  public void Explode(Ship owner, Explosion type, Vector2 pos)
   { ExpData data = expData[(int)type];
     int[]    num = new int[4];
     for(int i=0; i<4; i++) num[i] = data.Lows[i]+Globals.Random.Next(data.Highs[i]-data.Lows[i]);
     
     for(int i=0; i<num[0]; i++) // shrapnel
-    { VectorF ang = Globals.Vector(Globals.Random.Next());
+    { Vector2 ang = Globals.Vector(Globals.Random.Next());
       AddObject(new Bullet(owner, pos+ang*Globals.Random.Next(data.Radius), ang, owner.Color));
     }
 
@@ -160,7 +170,7 @@ public class World
       { Exploder o = new Exploder(i-1);
         if(type==Explosion.Tiny) o.Pos=pos;
         else
-        { VectorF ang = Globals.Vector(Globals.Random.Next());
+        { Vector2 ang = Globals.Vector(Globals.Random.Next());
           o.Pos = pos+ang*Globals.Random.Next(8);
           o.Vel = ang*(Globals.Random.Next((int)type+1)*0.5f);
           o.Activate = Globals.Random.Next(e++*2);
@@ -170,15 +180,29 @@ public class World
   }
 
   public void RemoveCircle(int x, int y, int radius)
-  { if(fore!=null) Primitives.FilledCircle(fore, x, y, radius, Colors.Transparent);
-    Primitives.FilledCircle(over, x, y, radius, 255);
+  { if(fore!=null) Shapes.FilledCircle(fore, x, y, radius, Colors.Transparent);
+    Shapes.FilledCircle(over, x, y, radius, over.ColorKey);
   }
 
-  public VectorF FindSpawnPoint() { return new VectorF(60, 50); }
+  public Vector2 FindSpawnPoint()
+  {
+    // TODO: find spawn points once and cache them
+    List<Vector2> spawnPoints = new List<Vector2>();
+    over.Lock();
+    for(int y=0; y<over.Height; y++)
+    {
+      for(int x=0; x<over.Width; x++)
+      {
+        if((over.GetPixelRaw(x, y) & 8) != 0) spawnPoints.Add(new Vector2(x, y));
+      }
+    }
+    over.Unlock();
+    return spawnPoints[Globals.Random.Next(spawnPoints.Count)];
+  }
 
   void Advance()
-  { for(LinkedList.Node node = objects.Head; node!=null; node=node.NextNode)
-    { GameObject o = (GameObject)node.Data;
+  { for(LinkedListNode<GameObject> node = objects.First; node!=null; node=node.Next)
+    { GameObject o = node.Value;
       if(o.Remove) continue;
       o.Think();
       o.CalcVel();
@@ -195,8 +219,8 @@ public class World
       }
     }
     
-    for(LinkedList.Node node = objects.Head; node!=null; node=node.NextNode)
-    { GameObject o = (GameObject)node.Data;
+    for(LinkedListNode<GameObject> node = objects.First; node!=null; node=node.Next)
+    { GameObject o = node.Value;
       if(o.Remove) continue;
       if(o.IsHitMap) o.HitMap();
       if(o.CanHitObjs)
@@ -209,10 +233,10 @@ public class World
         if(p.Ship.Health>0 && o.Intersects(p.Ship)) o.HitShip(p.Ship);
     }
     if((tick&0x1F)==0) // GC every 32 ticks
-    { LinkedList.Node cur = objects.Head, next;
+    { LinkedListNode<GameObject> cur = objects.First, next;
       while(cur!=null)
-      { next = cur.NextNode;
-        GameObject o = (GameObject)cur.Data;
+      { next = cur.Next;
+        GameObject o = cur.Value;
         if(o.Remove && o.NetPolicy!=NetPolicy.RemoteAll) RemoveObject(o.ID);
         cur = next;
       }
@@ -227,9 +251,9 @@ public class World
     public int Radius;
   }
 
-  ArrayList  players  = new ArrayList();
-  LinkedList objects  = new LinkedList();
-  Hashtable  objIndex = new Hashtable();
+  List<Player> players = new List<Player>();
+  LinkedList<GameObject> objects = new LinkedList<GameObject>();
+  Dictionary<uint, LinkedListNode<GameObject>> objIndex = new Dictionary<uint, LinkedListNode<GameObject>>();
   Surface    fore, back, over;
   uint  tick, nextTime, timeInc=33, tps=30, nextObj;
   bool  updated;
